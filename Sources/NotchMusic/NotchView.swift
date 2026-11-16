@@ -5,9 +5,7 @@ import SwiftUI
 struct NotchView: View {
     @ObservedObject var player: NowPlaying
     @ObservedObject var state: NotchState
-    @ObservedObject var tray: MenuBarTray
     var onTap: () -> Void = {}
-    var onPressItem: (MenuBarItem) -> Void = { _ in }
 
     private var expanded: Bool { state.expanded && state.isActive }
 
@@ -23,18 +21,8 @@ struct NotchView: View {
             shape.fill(Color.black)
 
             if expanded {
-                VStack(spacing: 0) {
-                    if state.hasMedia {
-                        ExpandedContent(player: player, barHeight: state.notchSize.height)
-                            .padding(.horizontal, 22)
-                    }
-                    if state.showsTray {
-                        // 음악이 없으면 서랍만, 메뉴 막대 바로 아래에 보여 준다.
-                        TrayRow(tray: tray, showsDivider: state.hasMedia, onPress: onPressItem)
-                            .frame(height: state.trayHeight)
-                            .padding(.top, state.hasMedia ? 6 : state.notchSize.height + 4)
-                    }
-                }
+                ExpandedContent(player: player, barHeight: state.notchSize.height)
+                    .padding(.horizontal, 22)
                     .frame(width: g.bodyRight - g.bodyLeft)
                     .offset(x: center + g.bodyLeft)
                     .transition(.opacity.combined(with: .scale(scale: 0.94, anchor: .top)))
@@ -327,7 +315,7 @@ private struct ControlButton: View {
     }
 }
 
-private struct PressStyle: ButtonStyle {
+struct PressStyle: ButtonStyle {
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
             .scaleEffect(configuration.isPressed ? 0.86 : 1)
@@ -348,7 +336,7 @@ private struct MenuItems: View {
         Picker("펼친 모양", selection: $state.expandedStyle) {
             ForEach(ExpandedStyle.allCases, id: \.self) { Text($0.title).tag($0) }
         }
-        Toggle("메뉴 막대 서랍 (손쉬운 사용 권한 필요)", isOn: $state.trayEnabled)
+        Toggle("숨은 메뉴 막대 아이콘 판 (손쉬운 사용 권한 필요)", isOn: $state.trayEnabled)
         Divider()
         Button(SMAppService.mainApp.status == .enabled ? "로그인 시 자동 실행 끄기" : "로그인 시 자동 실행 켜기") {
             let service = SMAppService.mainApp
@@ -361,70 +349,6 @@ private struct MenuItems: View {
         Divider()
         Button("NotchMusic 종료") { NSApp.terminate(nil) }
     }
-}
-
-// MARK: - 메뉴 막대 서랍
-
-private struct TrayRow: View {
-    @ObservedObject var tray: MenuBarTray
-    var showsDivider = true
-    let onPress: (MenuBarItem) -> Void
-
-    var body: some View {
-        VStack(spacing: 0) {
-            if showsDivider {
-                Rectangle().fill(Color(white: 0.16)).frame(height: 1).padding(.horizontal, 22)
-            }
-            if tray.items.isEmpty {
-                Text("메뉴 막대 아이콘을 읽는 중")
-                    .font(.system(size: 11))
-                    .foregroundStyle(Color(white: 0.45))
-                    .frame(maxHeight: .infinity)
-            } else {
-                ScrollView(.horizontal, showsIndicators: false) {
-                    HStack(spacing: 4) {
-                        // macOS의 « 버튼은 메뉴 막대에 펼치기만 해서 서랍에서는 의미가 없다.
-                        // 숨은 아이콘은 서랍에 이미 다 나와 있고, 누를 때 안에서 « 를 대신 쓴다.
-                        ForEach(tray.items.filter { $0.id != "overflow" }) { item in
-                            TrayButton(item: item) { onPress(item) }
-                        }
-                    }
-                    .padding(.horizontal, 18)
-                }
-                .frame(maxHeight: .infinity)
-            }
-        }
-    }
-}
-
-private struct TrayButton: View {
-    let item: MenuBarItem
-    let action: () -> Void
-    @State private var hovered = false
-
-    var body: some View {
-        Button(action: action) {
-            Group {
-                if let icon = item.icon {
-                    Image(nsImage: icon).resizable().aspectRatio(contentMode: .fit).frame(width: 20, height: 20)
-                } else {
-                    Image(systemName: item.symbol ?? "circle.grid.2x2")
-                        .font(.system(size: 14))
-                        .foregroundStyle(.white.opacity(0.85))
-                }
-            }
-            .frame(width: 32, height: 30)
-            .background(RoundedRectangle(cornerRadius: 8, style: .continuous).fill(Color.white.opacity(hovered && usable ? 0.12 : 0)))
-            .opacity(usable ? 1 : 0.3)
-            .contentShape(Rectangle())
-        }
-        .buttonStyle(PressStyle())
-        .onHover { hovered = $0 }
-        .help(usable ? item.name : "\(item.name) (노치에 가려져 있어 누를 수 없음)")
-    }
-
-    /// 보이는 아이콘, 또는 « 로 펼쳐서 누를 수 있는 숨은 아이콘
-    private var usable: Bool { item.isDrawn || item.isOverflowed }
 }
 
 // MARK: - 노치 모양

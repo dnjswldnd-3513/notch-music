@@ -10,7 +10,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // 사용자처럼 노치에 마우스를 올리고 서랍 아이콘을 눌러, 메뉴가 열렸는지 결과 파일에 쓴다.
         let args = CommandLine.arguments
         if let i = args.firstIndex(of: "--selftest"), i + 2 < args.count {
-            controller.runSelfTest(pressing: args[i + 1]) { lines in
+            controller.hiddenIcons.runSelfTest(pressing: args[i + 1]) { lines in
                 try? lines.joined(separator: "\n").write(toFile: args[i + 2], atomically: true, encoding: .utf8)
                 exit(0)
             }
