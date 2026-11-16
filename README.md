@@ -1,6 +1,6 @@
 # NotchMusic
 
-맥북 노치에 지금 재생 중인 음악을 보여 주는 작은 앱입니다.
+맥북 노치에 지금 재생 중인 음악과 통화·회의를 보여 주는 작은 앱입니다.
 
 - 평소에는 노치 옆에 **앨범 커버**와 **움직이는 막대**만 작게 보입니다.
 - 접혀 있을 때는 노치 왼쪽에만 붙어서 **오른쪽 메뉴 막대 아이콘을 가리지 않습니다.**
@@ -12,6 +12,16 @@
 - Apple Music뿐 아니라 **제어 센터의 "지금 재생 중"에 뜨는 것은 다 됩니다** (Spotify, Safari·Chrome의 유튜브 등).
 
 노치가 없는 맥에서는 화면 맨 위 가운데에 같은 모양으로 나옵니다.
+
+### 전화·회의 표시
+
+통화나 회의가 시작되면 노치에 음악 대신 통화가 먼저 나옵니다. 끝나면 다시 음악으로 돌아옵니다.
+
+- **접힌 모습**: 통화 아이콘(Meet은 파란 카메라, 전화는 초록 전화), 통화 시간, 마이크 상태
+- **펼친 모습**: 앱·회의 이름, 통화 시간, 카메라 켜짐 여부, **마이크 끄기/켜기**, **회의로 가기(앱으로 가기)**
+- 어떤 앱이든 마이크를 쓰기 시작하면 통화로 봅니다(Google Meet, FaceTime, 카카오톡, Zoom, Discord 등). Siri 대기처럼 시스템이 쓰는 마이크는 빼고 봅니다. 권한이 필요 없습니다.
+- **마이크 끄기**는 맥 마이크 자체를 끕니다. 어떤 앱이든 상대에게 내 소리가 안 갑니다. 앱 화면의 마이크 버튼은 켜진 것처럼 보이니, 끄는 동안 노치에 빨간 마이크가 계속 표시됩니다.
+- Google Meet은 브라우저(Chrome·Safari·Arc·Edge·Brave·Whale)에 Meet 탭이 있는지 물어서 알아봅니다. 처음 한 번 "NotchMusic이 Chrome을 제어하려고 합니다" 창이 뜨면 **허용**을 누르세요. 허용하지 않으면 "브라우저 통화"로만 나옵니다.
 
 ### 메뉴 막대 빈 틈에 맞추기 (선택)
 
@@ -102,6 +112,8 @@ NotchMusic.app ──stdin(명령)──▶ /usr/bin/perl run.pl adapter.dylib �
 | `Sources/NotchMusic/NotchController.swift` | 노치 위 창 위치, 마우스 올림 감지 |
 | `Sources/NotchMusic/NotchView.swift` | 노치 모양과 화면 |
 | `Sources/NotchMusic/ArtworkColor.swift` | 앨범 커버에서 대표 색 뽑기 |
+| `Sources/NotchMusic/CallMonitor.swift` | 마이크·카메라를 쓰는 앱으로 통화 감지, 마이크 끄기, Meet 탭 찾기 |
+| `Sources/NotchMusic/CallViews.swift` | 통화 화면 (아이콘, 시간, 버튼) |
 | `Sources/NotchMusic/MenuBarSpace.swift` | 노치 양옆 빈 틈 재기(손쉬운 사용, 읽기만) |
 | `Sources/NotchMusic/MenuBarTray.swift` | 메뉴 막대 아이콘 목록 읽기 (개발용 진단) |
 
