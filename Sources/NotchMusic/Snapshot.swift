@@ -16,7 +16,7 @@ enum Snapshot {
 
         for expanded in [false, true] {
             state.expanded = expanded
-            let view = NotchView(player: player, state: state)
+            let view = NotchView(player: player, state: state, tray: MenuBarTray())
                 .frame(width: state.windowSize.width, height: state.windowSize.height)
                 .background(Color(white: 0.93))
             let renderer = ImageRenderer(content: view)

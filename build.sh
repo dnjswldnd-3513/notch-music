@@ -47,7 +47,11 @@ cat > "$APP/Contents/Info.plist" <<PLIST
 </plist>
 PLIST
 
-codesign --force --deep --sign - "$APP" >/dev/null
+# 키체인에 "NotchMusic Signing" 인증서가 있으면 그걸로 서명한다. 서명이 버전마다 같아야
+# 업데이트해도 손쉬운 사용 권한이 유지된다. 없으면(다른 사람이 빌드할 때) 임시 서명.
+IDENTITY="$(security find-identity -p codesigning 2>/dev/null | awk '/"NotchMusic Signing"/ {print $2; exit}')"
+codesign --force --deep --sign "${IDENTITY:--}" "$APP" >/dev/null
+[[ -n "$IDENTITY" ]] && echo "  (NotchMusic Signing 인증서로 서명)" || echo "  (임시 서명: 업데이트 때마다 권한을 다시 줘야 함)"
 echo "✓ $APP"
 
 case "${1:-}" in
