@@ -333,6 +333,9 @@ private struct MenuItems: View {
         Picker("접혔을 때 위치", selection: $state.collapsedStyle) {
             ForEach(CollapsedStyle.allCases, id: \.self) { Text($0.title).tag($0) }
         }
+        Picker("펼친 모양", selection: $state.expandedStyle) {
+            ForEach(ExpandedStyle.allCases, id: \.self) { Text($0.title).tag($0) }
+        }
         Divider()
         Button(SMAppService.mainApp.status == .enabled ? "로그인 시 자동 실행 끄기" : "로그인 시 자동 실행 켜기") {
             let service = SMAppService.mainApp

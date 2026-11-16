@@ -30,6 +30,20 @@ enum CollapsedStyle: String, CaseIterable, Hashable {
     }
 }
 
+enum ExpandedStyle: String, CaseIterable, Hashable {
+    /// 메뉴 막대 줄까지 통째로 넓게 덮는다.
+    case wide
+    /// 메뉴 막대 줄에서는 노치 폭만 쓰고, 그 아래에서만 넓어진다.
+    case belowBar
+
+    var title: String {
+        switch self {
+        case .wide: "넓게"
+        case .belowBar: "메뉴 막대 아이콘 피해서"
+        }
+    }
+}
+
 /// 노치 모양을 정하는 값. 모두 화면 가운데 기준 x 좌표(왼쪽은 음수)와 위에서부터의 높이.
 struct NotchGeometry: Equatable {
     /// 메뉴 막대 줄 안에서 차지하는 폭
@@ -51,6 +65,9 @@ final class NotchState: ObservableObject {
     @Published var collapsedStyle = NotchState.load(CollapsedStyle.self, "collapsedStyle", .left) {
         didSet { UserDefaults.standard.set(collapsedStyle.rawValue, forKey: "collapsedStyle") }
     }
+    @Published var expandedStyle = NotchState.load(ExpandedStyle.self, "expandedStyle", .wide) {
+        didSet { UserDefaults.standard.set(expandedStyle.rawValue, forKey: "expandedStyle") }
+    }
 
     /// 노치 위쪽 모서리가 바깥으로 살짝 휘어지는 부분의 반지름.
     let flare: CGFloat = 8
@@ -65,10 +82,11 @@ final class NotchState: ObservableObject {
     func geometry(expanded: Bool) -> NotchGeometry {
         let half = notchSize.width / 2
         if expanded {
-            // 메뉴 막대 줄에서는 노치 폭만, 그 아래에서만 넓게 퍼진다.
             let body = expandedWidth / 2
+            // 넓게: 목과 몸이 같은 폭. 피해서: 메뉴 막대 줄에서는 노치 폭만.
+            let neck = expandedStyle == .wide ? body : half
             return NotchGeometry(
-                neckLeft: -half, neckRight: half, bodyLeft: -body, bodyRight: body,
+                neckLeft: -neck, neckRight: neck, bodyLeft: -body, bodyRight: body,
                 height: notchSize.height + expandedBodyHeight
             )
         }
