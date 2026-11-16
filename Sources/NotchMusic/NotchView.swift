@@ -383,7 +383,9 @@ private struct TrayRow: View {
             } else {
                 ScrollView(.horizontal, showsIndicators: false) {
                     HStack(spacing: 4) {
-                        ForEach(tray.items) { item in
+                        // macOS의 « 버튼은 메뉴 막대에 펼치기만 해서 서랍에서는 의미가 없다.
+                        // 숨은 아이콘은 서랍에 이미 다 나와 있고, 누를 때 안에서 « 를 대신 쓴다.
+                        ForEach(tray.items.filter { $0.id != "overflow" }) { item in
                             TrayButton(item: item) { onPress(item) }
                         }
                     }

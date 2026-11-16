@@ -348,7 +348,7 @@ final class NotchController {
                 let before = Self.popupWindows()
                 // 2. 서랍에 그려진 그 아이콘 버튼 자리를 실제 마우스로 클릭한다.
                 //    버튼 위치: 펼친 몸통 왼쪽 + 여백 18 + (버튼 32 + 간격 4) × 순서, 세로는 재생 화면 아래 서랍 줄 가운데
-                let index = CGFloat(tray.items.firstIndex { $0.id == item.id } ?? 0)
+                let index = CGFloat(tray.items.filter { $0.id != "overflow" }.firstIndex { $0.id == item.id } ?? 0)
                 let g = state.geometry(expanded: true)
                 let trayTop = state.notchSize.height + (state.hasMedia ? 132 + 6 + 1 : 4)
                 let point = CGPoint(
