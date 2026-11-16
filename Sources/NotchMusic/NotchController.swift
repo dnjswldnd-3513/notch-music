@@ -1,9 +1,28 @@
 import AppKit
+import Combine
 import SwiftUI
 
 /// 노치 크기와 펼침 상태. 화면(컨트롤러)과 그림(뷰)이 같은 값을 쓴다.
+enum ExpandMode: String, CaseIterable, Hashable {
+    /// 마우스를 올리면 펼치고, 치우면 접는다.
+    case hover
+    /// 클릭하면 펼치고, 다시 클릭할 때까지 그대로 둔다.
+    case click
+
+    var title: String {
+        switch self {
+        case .hover: "마우스를 올리면"
+        case .click: "클릭하면 (다시 클릭할 때까지 유지)"
+        }
+    }
+}
+
 final class NotchState: ObservableObject {
     @Published var expanded = false
+    @Published var expandMode: ExpandMode =
+        ExpandMode(rawValue: UserDefaults.standard.string(forKey: "expandMode") ?? "") ?? .hover {
+        didSet { UserDefaults.standard.set(expandMode.rawValue, forKey: "expandMode") }
+    }
     @Published var notchSize = CGSize(width: 200, height: 32)
 
     /// 노치 위쪽 모서리가 바깥으로 살짝 휘어지는 부분의 반지름.
@@ -25,6 +44,9 @@ final class NotchController {
     private var mouseTimer: Timer?
     private var hovering = false
     private var collapseWork: DispatchWorkItem?
+    /// 클릭 모드에서 사용자가 펼쳐 둔 상태.
+    private var pinned = false
+    private var modeObserver: AnyCancellable?
 
     func start() {
         panel = NotchPanel(
@@ -38,7 +60,7 @@ final class NotchController {
         panel.isMovable = false
         panel.ignoresMouseEvents = true
 
-        let view = NotchView(player: player, state: state)
+        let view = NotchView(player: player, state: state) { [weak self] in self?.handleTap() }
         let host = FirstMouseHostingView(rootView: view)
         host.sizingOptions = []
         panel.contentView = host
@@ -58,6 +80,14 @@ final class NotchController {
         // 메뉴가 열려 있거나 스크롤 중에도 멈추지 않게 common 모드에 건다.
         RunLoop.main.add(timer, forMode: .common)
         mouseTimer = timer
+
+        // 설정을 바꾸면 펼쳐 둔 상태를 풀고 접은 모습에서 다시 시작한다.
+        modeObserver = state.$expandMode.dropFirst().sink { [weak self] _ in
+            guard let self else { return }
+            self.pinned = false
+            self.collapseWork?.cancel()
+            self.setExpanded(false)
+        }
 
         player.onTrackChange = { [weak self] in self?.peek() }
         player.start()
@@ -106,6 +136,8 @@ final class NotchController {
         if panel.ignoresMouseEvents == inside { panel.ignoresMouseEvents = !inside }
         guard inside != hovering else { return }
         hovering = inside
+        // 클릭 모드에서는 마우스를 올려도 모양이 그대로다.
+        guard state.expandMode == .hover else { return }
 
         if inside {
             collapseWork?.cancel()
@@ -117,15 +149,31 @@ final class NotchController {
 
     /// 곡이 바뀌면 잠깐 펼쳤다가 접는다.
     private func peek() {
-        guard !hovering else { return }
+        guard !keepOpen else { return }
         setExpanded(true)
         scheduleCollapse(after: 2.5)
+    }
+
+    /// 클릭 모드에서 노치(버튼 말고 빈 곳)를 누르면 펼치고, 다시 누르면 접는다.
+    private func handleTap() {
+        guard state.expandMode == .click else { return }
+        collapseWork?.cancel()
+        pinned = !state.expanded
+        setExpanded(pinned)
+    }
+
+    /// 지금 접으면 안 되는 상태인지: 마우스 모드에서 올려 둔 중이거나, 클릭 모드에서 펼쳐 둔 중.
+    private var keepOpen: Bool {
+        switch state.expandMode {
+        case .hover: hovering
+        case .click: pinned
+        }
     }
 
     private func scheduleCollapse(after delay: TimeInterval) {
         collapseWork?.cancel()
         let work = DispatchWorkItem { [weak self] in
-            guard let self, !self.hovering else { return }
+            guard let self, !self.keepOpen else { return }
             self.setExpanded(false)
         }
         collapseWork = work

@@ -5,6 +5,7 @@ import SwiftUI
 struct NotchView: View {
     @ObservedObject var player: NowPlaying
     @ObservedObject var state: NotchState
+    var onTap: () -> Void = {}
 
     private var expanded: Bool { state.expanded && player.hasMedia }
 
@@ -28,8 +29,10 @@ struct NotchView: View {
         }
         .frame(width: size.width + state.flare * 2, height: size.height)
         .clipShape(shape)
+        .contentShape(shape)
+        .onTapGesture { onTap() }
         .opacity(player.hasMedia ? 1 : 0)
-        .contextMenu { MenuItems() }
+        .contextMenu { MenuItems(state: state) }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
         .animation(.easeInOut(duration: 0.3), value: player.hasMedia)
     }
@@ -233,7 +236,15 @@ private struct PressStyle: ButtonStyle {
 }
 
 private struct MenuItems: View {
+    @ObservedObject var state: NotchState
+
     var body: some View {
+        Picker("펼치는 방법", selection: $state.expandMode) {
+            ForEach(ExpandMode.allCases, id: \.self) { mode in
+                Text(mode.title).tag(mode)
+            }
+        }
+        Divider()
         Button(SMAppService.mainApp.status == .enabled ? "로그인 시 자동 실행 끄기" : "로그인 시 자동 실행 켜기") {
             let service = SMAppService.mainApp
             do {
