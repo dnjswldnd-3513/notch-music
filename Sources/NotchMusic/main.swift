@@ -30,6 +30,7 @@ if let index = CommandLine.arguments.firstIndex(of: "--dump-tray"), index + 1 < 
     }
     let lines = [
         "trusted=\(AXIsProcessTrusted()) 앞 앱=\(NSWorkspace.shared.frontmostApplication?.localizedName ?? "-")",
+        "--- 통화 감지"] + CallMonitor.debugLines() + ["---",
         "빈 틈: 왼쪽=\(room.map { Int($0.left) }.map(String.init) ?? "-") 오른쪽=\(room.map { Int($0.right) }.map(String.init) ?? "-")",
     ] + tray.items.map {
         "\($0.isDrawn ? "보임" : "가림") \(Int($0.frame.minX)),\(Int($0.frame.minY)) \(Int($0.frame.width))x\(Int($0.frame.height)) \($0.name)"

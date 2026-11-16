@@ -4,6 +4,7 @@ import SwiftUI
 
 struct NotchView: View {
     @ObservedObject var player: NowPlaying
+    @ObservedObject var calls: CallMonitor
     @ObservedObject var state: NotchState
     var onTap: () -> Void = {}
 
@@ -21,13 +22,20 @@ struct NotchView: View {
             shape.fill(Color.black)
 
             if expanded {
-                ExpandedContent(player: player, barHeight: state.notchSize.height)
-                    .padding(.horizontal, 22)
-                    .frame(width: g.bodyRight - g.bodyLeft)
-                    .offset(x: center + g.bodyLeft)
-                    .transition(.opacity.combined(with: .scale(scale: 0.94, anchor: .top)))
-            } else if state.hasMedia {
-                CollapsedContent(player: player, state: state)
+                Group {
+                    // 통화 중에는 음악보다 통화를 먼저 보여 준다.
+                    if state.hasCall, let call = calls.call {
+                        CallExpandedContent(calls: calls, call: call, barHeight: state.notchSize.height)
+                    } else {
+                        ExpandedContent(player: player, barHeight: state.notchSize.height)
+                    }
+                }
+                .padding(.horizontal, 22)
+                .frame(width: g.bodyRight - g.bodyLeft)
+                .offset(x: center + g.bodyLeft)
+                .transition(.opacity.combined(with: .scale(scale: 0.94, anchor: .top)))
+            } else if state.isActive {
+                CollapsedContent(player: player, calls: calls, state: state)
                     .frame(width: g.neckRight - g.neckLeft, height: state.notchSize.height)
                     .offset(x: center + g.neckLeft)
                     .transition(.opacity)
@@ -39,7 +47,7 @@ struct NotchView: View {
         .onTapGesture { onTap() }
         .opacity(state.isActive ? 1 : 0)
         .contextMenu { MenuItems(state: state) }
-        .animation(.easeInOut(duration: 0.3), value: state.hasMedia)
+        .animation(.easeInOut(duration: 0.3), value: state.isActive)
         .animation(.spring(response: 0.3, dampingFraction: 0.85), value: state.collapsedLayout)
     }
 }
@@ -49,6 +57,7 @@ struct NotchView: View {
 /// 노치 왼쪽·오른쪽 빈 틈에 들어가는 조각(커버, 막대)만 놓는다. 무엇을 어디에 둘지는 NotchState.collapsedLayout이 정한다.
 private struct CollapsedContent: View {
     @ObservedObject var player: NowPlaying
+    @ObservedObject var calls: CallMonitor
     @ObservedObject var state: NotchState
 
     var body: some View {
@@ -69,9 +78,12 @@ private struct CollapsedContent: View {
                         switch piece {
                         case .cover: Cover(player: player, size: 20, radius: 5)
                         case .wave: Wave(playing: player.isPlaying, color: player.accent, height: 13)
+                        case .call: CallBadge(kind: calls.call?.kind ?? .other, size: 20)
+                        case .timer: CallTimer(start: calls.call?.startedAt ?? Date(), size: 12)
+                        case .mic: MicIndicator(muted: calls.micMuted, size: 13)
                         }
                     }
-                    .frame(width: state.pieceWidth)
+                    .frame(width: state.width(of: piece))
                 }
             }
             .frame(width: state.width(of: pieces))

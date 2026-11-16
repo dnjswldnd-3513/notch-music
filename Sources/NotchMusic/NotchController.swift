@@ -84,38 +84,62 @@ final class NotchState: ObservableObject {
     /// 지금 재생 중인 게 있는지 (컨트롤러가 NowPlaying에서 옮겨 넣는다)
     @Published var hasMedia = false
 
-    /// 노치는 음악 전용이라, 재생 중일 때만 보인다.
-    var isActive: Bool { hasMedia }
+    /// 통화·회의 중인지 (컨트롤러가 CallMonitor에서 옮겨 넣는다). 통화가 음악보다 먼저 보인다.
+    @Published var hasCall = false
+
+    /// 노치는 음악이나 통화가 있을 때만 보인다.
+    var isActive: Bool { hasMedia || hasCall }
     let expandedBodyHeight: CGFloat = 132
 
     var sideWidth: CGFloat { max(notchSize.height - 4, 26) }
 
     /// 접혔을 때 노치 왼쪽·오른쪽에 무엇을 둘지
-    enum Piece { case cover, wave }
+    enum Piece { case cover, wave, call, timer, mic }
     struct CollapsedLayout: Equatable {
         var left: [Piece]
         var right: [Piece]
     }
 
-    /// 조각 하나가 차지하는 폭과 바깥 여백
-    let pieceWidth: CGFloat = 28
+    /// 조각마다 차지하는 폭과 바깥 여백
     let sidePadding: CGFloat = 8
+    func width(of piece: Piece) -> CGFloat {
+        switch piece {
+        case .cover, .wave, .call: 28
+        case .timer: 44
+        case .mic: 24
+        }
+    }
     func width(of pieces: [Piece]) -> CGFloat {
-        pieces.isEmpty ? 0 : CGFloat(pieces.count) * pieceWidth + sidePadding
+        pieces.isEmpty ? 0 : pieces.reduce(0) { $0 + width(of: $1) } + sidePadding
     }
 
     /// 빈 틈에 들어가는 것 중 설정과 가장 가까운 배치를 고른다. 아무것도 안 들어가면 노치 안에 숨는다.
     var collapsedLayout: CollapsedLayout {
-        let preferred: [CollapsedLayout] = collapsedStyle == .left
-            ? [.init(left: [.cover, .wave], right: []), .init(left: [.cover], right: [.wave]),
-               .init(left: [], right: [.cover, .wave]), .init(left: [.cover], right: []), .init(left: [], right: [.cover])]
-            : [.init(left: [.cover], right: [.wave]), .init(left: [.cover, .wave], right: []),
-               .init(left: [], right: [.cover, .wave]), .init(left: [.cover], right: []), .init(left: [], right: [.cover])]
+        let preferred: [CollapsedLayout]
+        if hasCall {
+            // 통화 중: 왼쪽에 전화 아이콘·시간, 오른쪽에 마이크 상태. 마이크 표시는 음소거를 잊지 않게 되도록 남긴다.
+            preferred = [
+                .init(left: [.call, .timer], right: [.mic]), .init(left: [.call, .timer, .mic], right: []),
+                .init(left: [.call], right: [.mic]), .init(left: [.call, .mic], right: []),
+                .init(left: [], right: [.call, .mic]), .init(left: [.mic], right: []), .init(left: [], right: [.mic]),
+            ]
+        } else {
+            preferred = musicLayouts
+        }
         guard fitToMenuBar, let room else { return preferred[0] }
         // 아이콘과 딱 붙지 않게 4pt 여유를 남긴다.
         return preferred.first { width(of: $0.left) <= room.left - 4 && width(of: $0.right) <= room.right - 4 }
             ?? .init(left: [], right: [])
     }
+
+    private var musicLayouts: [CollapsedLayout] {
+        collapsedStyle == .left
+            ? [.init(left: [.cover, .wave], right: []), .init(left: [.cover], right: [.wave]),
+               .init(left: [], right: [.cover, .wave]), .init(left: [.cover], right: []), .init(left: [], right: [.cover])]
+            : [.init(left: [.cover], right: [.wave]), .init(left: [.cover, .wave], right: []),
+               .init(left: [], right: [.cover, .wave]), .init(left: [.cover], right: []), .init(left: [], right: [.cover])]
+    }
+
     var windowSize: CGSize {
         CGSize(width: expandedWidth + flare * 2 + 40, height: notchSize.height + expandedBodyHeight + 20)
     }
@@ -131,8 +155,8 @@ final class NotchState: ObservableObject {
                 height: notchSize.height + expandedBodyHeight
             )
         }
-        // 음악이 없으면 접힌 모습은 실제 노치와 똑같은 크기라 눈에 보이지 않는다.
-        guard hasMedia else {
+        // 음악도 통화도 없으면 접힌 모습은 실제 노치와 똑같은 크기라 눈에 보이지 않는다.
+        guard isActive else {
             return NotchGeometry(neckLeft: -half, neckRight: half, bodyLeft: -half, bodyRight: half, height: notchSize.height)
         }
         let layout = collapsedLayout
@@ -149,6 +173,7 @@ final class NotchState: ObservableObject {
 /// 노치 위에 겹쳐 뜨는 창을 관리한다.
 final class NotchController {
     private let player = NowPlaying()
+    private let calls = CallMonitor()
     private let state = NotchState()
     private var panel: NotchPanel!
     private var screen: NSScreen?
@@ -177,7 +202,7 @@ final class NotchController {
         panel.isMovable = false
         panel.ignoresMouseEvents = true
 
-        let view = NotchView(player: player, state: state, onTap: { [weak self] in self?.handleTap() })
+        let view = NotchView(player: player, calls: calls, state: state, onTap: { [weak self] in self?.handleTap() })
         let host = FirstMouseHostingView(rootView: view)
         host.sizingOptions = []
         panel.contentView = host
@@ -217,7 +242,15 @@ final class NotchController {
             self?.state.hasMedia = has
         })
 
+        // 통화가 시작되면 노치에 통화를 먼저 보여 주고, 잠깐 펼쳐서 알린다.
+        observers.append(calls.$call.map { $0 != nil }.removeDuplicates().sink { [weak self] has in
+            guard let self else { return }
+            withAnimation(.spring(response: 0.35, dampingFraction: 0.85)) { self.state.hasCall = has }
+        })
+        calls.onCallStart = { [weak self] in self?.peek() }
+
         player.start()
+        calls.start()
     }
 
     /// 노치가 있는 화면 맨 위 가운데에 창을 붙인다.
