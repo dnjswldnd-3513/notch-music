@@ -428,6 +428,7 @@ final class NotchController {
 
     private func setExpanded(_ value: Bool) {
         guard state.expanded != value else { return }
+        if value { calls.refreshDetails() }
         withAnimation(value ? .spring(response: 0.3, dampingFraction: 0.8) : .spring(response: 0.26, dampingFraction: 0.92)) {
             state.expanded = value
         }

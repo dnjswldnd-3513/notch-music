@@ -179,7 +179,7 @@ final class CallMonitor: ObservableObject {
             let appName = app?.localizedName ?? bundle
 
             if browsers.contains(appBundle) {
-                let meet = app.flatMap { meetTitle(pid: $0.processIdentifier) }
+                let meet = meetTitle(bundleId: appBundle)
                 if let meet { return ("Google Meet", appBundle, .meet, meet.isEmpty ? appName : "\(meet) · \(appName)") }
                 return (appName, appBundle, .other, "브라우저 통화")
             }
@@ -188,25 +188,74 @@ final class CallMonitor: ObservableObject {
         return nil
     }
 
-    /// 브라우저 창 제목에서 Meet 회의 이름을 찾는다. 손쉬운 사용 권한이 없거나 Meet 창이 아니면 nil.
-    /// 찾았는데 이름이 없으면 빈 문자열.
-    private static func meetTitle(pid: pid_t) -> String? {
-        guard AXIsProcessTrusted() else { return nil }
-        let app = AXUIElementCreateApplication(pid)
-        AXUIElementSetMessagingTimeout(app, 0.3)
-        var value: CFTypeRef?
-        guard AXUIElementCopyAttributeValue(app, kAXWindowsAttribute as CFString, &value) == .success,
-              let windows = value as? [AXUIElement] else { return nil }
-        for window in windows {
-            var title: CFTypeRef?
-            AXUIElementCopyAttributeValue(window, kAXTitleAttribute as CFString, &title)
-            guard let text = title as? String, text.hasPrefix("Meet") || text.contains("Google Meet") else { continue }
-            // "Meet - 주간 회의 - Google Chrome - 사람" → "주간 회의"
-            let parts = text.components(separatedBy: CharacterSet(charactersIn: "-–—")).map { $0.trimmingCharacters(in: .whitespaces) }
-            let name = parts.dropFirst().first { !$0.isEmpty && !$0.contains("Google") && !$0.contains("Chrome") } ?? ""
-            return name
+    /// 브라우저에 "meet.google.com 탭이 열려 있는지" 물어서 회의 이름을 찾는다. (탭 주소로 찾아서 어느 창·탭에 있든 찾는다)
+    /// Meet 탭이 없으면 nil, 있는데 이름을 모르면 빈 문자열. 처음 한 번 "브라우저 제어" 허락 창이 뜬다.
+    private static func meetTitle(bundleId: String) -> String? {
+        guard let output = runBrowserScript(bundleId: bundleId, action: "title"), !output.isEmpty else { return nil }
+        // 탭 제목 예: "Meet - abc-defg-hij", "Meet – 주간 회의", "주간 회의 - Google Meet"
+        var title = output.components(separatedBy: "\n").first ?? ""
+        for junk in ["Google Meet", "Meet - ", "Meet – ", "Meet — ", " - ", " – "] {
+            title = title.replacingOccurrences(of: junk, with: junk.hasPrefix("Meet") || junk == "Google Meet" ? "" : " ")
         }
-        return nil
+        return title.trimmingCharacters(in: .whitespaces)
+    }
+
+    /// Chrome 계열·Safari에 AppleScript로 Meet 탭을 묻거나(title) 그 탭을 앞으로 가져온다(focus).
+    /// osascript를 따로 띄워서 앱이 멈추지 않게 하고, 2초 안에 답이 없으면 포기한다.
+    @discardableResult
+    private static func runBrowserScript(bundleId: String, action: String) -> String? {
+        let isSafari = bundleId == "com.apple.Safari"
+        let urlProp = "URL", titleProp = isSafari ? "name" : "title"
+        let found: String
+        if action == "focus" {
+            found = isSafari
+                ? "set current tab of w to t\nset index of w to 1\nactivate\nreturn \"ok\""
+                : "set active tab index of w to i\nset index of w to 1\nactivate\nreturn \"ok\""
+        } else {
+            found = "return \(titleProp) of t"
+        }
+        let script = """
+        tell application id "\(bundleId)"
+            repeat with w in windows
+                set i to 0
+                repeat with t in tabs of w
+                    set i to i + 1
+                    if \(urlProp) of t contains "meet.google.com/" and \(urlProp) of t does not end with "meet.google.com/" then
+                        \(found)
+                    end if
+                end repeat
+            end repeat
+            return ""
+        end tell
+        """
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/usr/bin/osascript")
+        process.arguments = ["-e", script]
+        let pipe = Pipe()
+        process.standardOutput = pipe
+        process.standardError = FileHandle.nullDevice
+        do { try process.run() } catch { return nil }
+        let deadline = Date().addingTimeInterval(2)
+        while process.isRunning, Date() < deadline { usleep(20_000) }
+        if process.isRunning { process.terminate(); return nil }
+        let data = pipe.fileHandleForReading.readDataToEndOfFile()
+        return String(data: data, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    /// 통화 중이면 앱·회의 이름을 다시 확인한다. (노치를 펼칠 때 부른다. 예: 브라우저 제어를 나중에 허락한 경우)
+    func refreshDetails() {
+        guard call != nil else { return }
+        audioQueue.async { [weak self] in
+            guard let found = Self.callingApp() else { return }
+            DispatchQueue.main.async {
+                guard let self, var current = self.call else { return }
+                current.appName = found.appName
+                current.bundleId = found.bundleId
+                current.kind = found.kind
+                current.detail = found.detail
+                if self.call != current { self.call = current }
+            }
+        }
     }
 
     // MARK: - 음소거
@@ -280,21 +329,11 @@ final class CallMonitor: ObservableObject {
             }
             return
         }
-        // Meet이면 회의 창을 맨 앞으로 올린다 (손쉬운 사용 권한이 있을 때)
-        if call.kind == .meet, AXIsProcessTrusted() {
-            let element = AXUIElementCreateApplication(app.processIdentifier)
-            var value: CFTypeRef?
-            if AXUIElementCopyAttributeValue(element, kAXWindowsAttribute as CFString, &value) == .success,
-               let windows = value as? [AXUIElement] {
-                for window in windows {
-                    var title: CFTypeRef?
-                    AXUIElementCopyAttributeValue(window, kAXTitleAttribute as CFString, &title)
-                    if let text = title as? String, text.hasPrefix("Meet") || text.contains("Google Meet") {
-                        AXUIElementPerformAction(window, kAXRaiseAction as CFString)
-                        break
-                    }
-                }
-            }
+        // Meet이면 브라우저에게 회의 탭을 골라 맨 앞으로 가져오게 한다.
+        if call.kind == .meet {
+            let bundle = call.bundleId
+            DispatchQueue.global(qos: .userInitiated).async { Self.runBrowserScript(bundleId: bundle, action: "focus") }
+            return
         }
         app.activate()
     }

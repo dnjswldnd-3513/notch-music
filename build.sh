@@ -43,6 +43,7 @@ cat > "$APP/Contents/Info.plist" <<PLIST
     <key>LSMinimumSystemVersion</key><string>14.0</string>
     <key>LSUIElement</key><true/>
     <key>NSHighResolutionCapable</key><true/>
+    <key>NSAppleEventsUsageDescription</key><string>Google Meet 회의 탭을 찾아 회의 이름을 보여 주고, 회의로 가기를 누르면 그 탭을 앞으로 가져오기 위해 필요합니다.</string>
 </dict>
 </plist>
 PLIST
