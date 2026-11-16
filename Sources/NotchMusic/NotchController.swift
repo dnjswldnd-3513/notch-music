@@ -2,7 +2,6 @@ import AppKit
 import Combine
 import SwiftUI
 
-/// 노치 크기와 펼침 상태. 화면(컨트롤러)과 그림(뷰)이 같은 값을 쓴다.
 enum ExpandMode: String, CaseIterable, Hashable {
     /// 마우스를 올리면 펼치고, 치우면 접는다.
     case hover
@@ -17,22 +16,77 @@ enum ExpandMode: String, CaseIterable, Hashable {
     }
 }
 
+enum CollapsedStyle: String, CaseIterable, Hashable {
+    /// 커버와 막대를 노치 왼쪽에 모은다. 메뉴 막대 아이콘이 몰리는 오른쪽을 비워 둔다.
+    case left
+    /// 커버는 왼쪽, 막대는 오른쪽.
+    case both
+
+    var title: String {
+        switch self {
+        case .left: "왼쪽에만 (메뉴 막대 아이콘 안 가림)"
+        case .both: "양옆"
+        }
+    }
+}
+
+/// 노치 모양을 정하는 값. 모두 화면 가운데 기준 x 좌표(왼쪽은 음수)와 위에서부터의 높이.
+struct NotchGeometry: Equatable {
+    /// 메뉴 막대 줄 안에서 차지하는 폭
+    var neckLeft: CGFloat
+    var neckRight: CGFloat
+    /// 메뉴 막대 아래로 내려온 부분의 폭
+    var bodyLeft: CGFloat
+    var bodyRight: CGFloat
+    var height: CGFloat
+}
+
+/// 노치 크기, 설정, 펼침 상태. 화면(컨트롤러)과 그림(뷰)이 같은 값을 쓴다.
 final class NotchState: ObservableObject {
     @Published var expanded = false
-    @Published var expandMode: ExpandMode =
-        ExpandMode(rawValue: UserDefaults.standard.string(forKey: "expandMode") ?? "") ?? .hover {
+    @Published var notchSize = CGSize(width: 200, height: 32)
+    @Published var expandMode = NotchState.load(ExpandMode.self, "expandMode", .hover) {
         didSet { UserDefaults.standard.set(expandMode.rawValue, forKey: "expandMode") }
     }
-    @Published var notchSize = CGSize(width: 200, height: 32)
+    @Published var collapsedStyle = NotchState.load(CollapsedStyle.self, "collapsedStyle", .left) {
+        didSet { UserDefaults.standard.set(collapsedStyle.rawValue, forKey: "collapsedStyle") }
+    }
 
     /// 노치 위쪽 모서리가 바깥으로 살짝 휘어지는 부분의 반지름.
-    let flare: CGFloat = 10
+    let flare: CGFloat = 8
     let expandedWidth: CGFloat = 400
+    let expandedBodyHeight: CGFloat = 132
 
-    var sideWidth: CGFloat { notchSize.height + 6 }
-    var collapsedSize: CGSize { CGSize(width: notchSize.width + sideWidth * 2, height: notchSize.height) }
-    var expandedSize: CGSize { CGSize(width: expandedWidth, height: notchSize.height + 132) }
-    var windowSize: CGSize { CGSize(width: expandedWidth + flare * 2 + 40, height: expandedSize.height + 20) }
+    var sideWidth: CGFloat { max(notchSize.height - 4, 26) }
+    var windowSize: CGSize {
+        CGSize(width: expandedWidth + flare * 2 + 40, height: notchSize.height + expandedBodyHeight + 20)
+    }
+
+    func geometry(expanded: Bool) -> NotchGeometry {
+        let half = notchSize.width / 2
+        if expanded {
+            // 메뉴 막대 줄에서는 노치 폭만, 그 아래에서만 넓게 퍼진다.
+            let body = expandedWidth / 2
+            return NotchGeometry(
+                neckLeft: -half, neckRight: half, bodyLeft: -body, bodyRight: body,
+                height: notchSize.height + expandedBodyHeight
+            )
+        }
+        let left: CGFloat, right: CGFloat
+        switch collapsedStyle {
+        case .left:
+            left = -(half + sideWidth * 2)
+            right = half
+        case .both:
+            left = -(half + sideWidth)
+            right = half + sideWidth
+        }
+        return NotchGeometry(neckLeft: left, neckRight: right, bodyLeft: left, bodyRight: right, height: notchSize.height)
+    }
+
+    private static func load<T: RawRepresentable>(_: T.Type, _ key: String, _ fallback: T) -> T where T.RawValue == String {
+        UserDefaults.standard.string(forKey: key).flatMap(T.init(rawValue:)) ?? fallback
+    }
 }
 
 /// 노치 위에 겹쳐 뜨는 창을 관리한다.
@@ -41,12 +95,14 @@ final class NotchController {
     private let state = NotchState()
     private var panel: NotchPanel!
     private var screen: NSScreen?
-    private var mouseTimer: Timer?
     private var hovering = false
     private var collapseWork: DispatchWorkItem?
     /// 클릭 모드에서 사용자가 펼쳐 둔 상태.
     private var pinned = false
-    private var modeObserver: AnyCancellable?
+    private var observers: [AnyCancellable] = []
+    private var mouseMonitors: [Any] = []
+    /// 마우스가 노치 안에 있는 동안만 도는 타이머. 밖에서는 이벤트가 올 때만 확인한다.
+    private var insideTimer: Timer?
 
     func start() {
         panel = NotchPanel(
@@ -72,22 +128,21 @@ final class NotchController {
             forName: NSApplication.didChangeScreenParametersNotification, object: nil, queue: .main
         ) { [weak self] _ in self?.layout() }
 
-        // 앱이 활성화되지 않아도 동작하도록 마우스 위치를 직접 확인한다. 한 번에 좌표 하나만 읽어서 가볍다.
-        let timer = Timer(timeInterval: 1.0 / 60, repeats: true) { [weak self] _ in
-            self?.trackMouse()
+        // 마우스가 움직일 때만 깨어난다. (예전에는 1초에 60번씩 계속 확인했다)
+        let events: NSEvent.EventTypeMask = [.mouseMoved, .leftMouseDragged]
+        if let global = NSEvent.addGlobalMonitorForEvents(matching: events, handler: { [weak self] _ in self?.trackMouse() }) {
+            mouseMonitors.append(global)
         }
-        timer.tolerance = 0.004
-        // 메뉴가 열려 있거나 스크롤 중에도 멈추지 않게 common 모드에 건다.
-        RunLoop.main.add(timer, forMode: .common)
-        mouseTimer = timer
+        if let local = NSEvent.addLocalMonitorForEvents(matching: events, handler: { [weak self] event in
+            self?.trackMouse()
+            return event
+        }) {
+            mouseMonitors.append(local)
+        }
 
         // 설정을 바꾸면 펼쳐 둔 상태를 풀고 접은 모습에서 다시 시작한다.
-        modeObserver = state.$expandMode.dropFirst().sink { [weak self] _ in
-            guard let self else { return }
-            self.pinned = false
-            self.collapseWork?.cancel()
-            self.setExpanded(false)
-        }
+        observers.append(state.$expandMode.dropFirst().sink { [weak self] _ in self?.resetExpansion() })
+        observers.append(state.$collapsedStyle.dropFirst().sink { [weak self] _ in self?.resetExpansion() })
 
         player.onTrackChange = { [weak self] in self?.peek() }
         player.start()
@@ -117,23 +172,37 @@ final class NotchController {
         )
     }
 
-    /// 지금 보이는 모양의 화면 좌표 영역.
-    private func visibleRect() -> NSRect? {
-        guard let screen, player.hasMedia else { return nil }
-        let size = state.expanded ? state.expandedSize : state.collapsedSize
-        let margin: CGFloat = state.expanded ? 8 : 4
-        return NSRect(
-            x: screen.frame.midX - size.width / 2 - margin,
-            y: screen.frame.maxY - size.height - margin,
-            width: size.width + margin * 2,
-            height: size.height + margin
-        )
+    /// 마우스가 지금 보이는 노치 모양 안에 있는지. 메뉴 막대 줄과 그 아래를 따로 본다.
+    private func isInside(_ point: NSPoint) -> Bool {
+        guard let screen, player.hasMedia else { return false }
+        let g = state.geometry(expanded: state.expanded)
+        let mid = screen.frame.midX, top = screen.frame.maxY
+        let barHeight = state.notchSize.height
+        let margin: CGFloat = 4
+
+        let neck = NSRect(x: mid + g.neckLeft, y: top - barHeight - margin, width: g.neckRight - g.neckLeft, height: barHeight + margin)
+        if neck.insetBy(dx: -margin, dy: 0).contains(point) { return true }
+        guard g.height > barHeight else { return false }
+        let body = NSRect(x: mid + g.bodyLeft, y: top - g.height, width: g.bodyRight - g.bodyLeft, height: g.height - barHeight)
+        return body.insetBy(dx: -margin * 2, dy: -margin * 2).contains(point)
     }
 
     private func trackMouse() {
-        let inside = visibleRect()?.contains(NSEvent.mouseLocation) ?? false
+        let inside = isInside(NSEvent.mouseLocation)
         // 모양 밖에서는 클릭이 뒤의 앱으로 그대로 통과한다.
         if panel.ignoresMouseEvents == inside { panel.ignoresMouseEvents = !inside }
+
+        // 창이 마우스를 받는 동안에는 바깥 이벤트가 안 오므로, 그동안만 짧게 확인한다.
+        if inside, insideTimer == nil {
+            let timer = Timer(timeInterval: 1.0 / 30, repeats: true) { [weak self] _ in self?.trackMouse() }
+            timer.tolerance = 0.01
+            RunLoop.main.add(timer, forMode: .common)
+            insideTimer = timer
+        } else if !inside {
+            insideTimer?.invalidate()
+            insideTimer = nil
+        }
+
         guard inside != hovering else { return }
         hovering = inside
         // 클릭 모드에서는 마우스를 올려도 모양이 그대로다.
@@ -162,6 +231,12 @@ final class NotchController {
         setExpanded(pinned)
     }
 
+    private func resetExpansion() {
+        pinned = false
+        collapseWork?.cancel()
+        setExpanded(false)
+    }
+
     /// 지금 접으면 안 되는 상태인지: 마우스 모드에서 올려 둔 중이거나, 클릭 모드에서 펼쳐 둔 중.
     private var keepOpen: Bool {
         switch state.expandMode {
@@ -182,7 +257,7 @@ final class NotchController {
 
     private func setExpanded(_ value: Bool) {
         guard state.expanded != value else { return }
-        withAnimation(value ? .spring(response: 0.3, dampingFraction: 0.78) : .spring(response: 0.26, dampingFraction: 0.92)) {
+        withAnimation(value ? .spring(response: 0.3, dampingFraction: 0.8) : .spring(response: 0.26, dampingFraction: 0.92)) {
             state.expanded = value
         }
     }

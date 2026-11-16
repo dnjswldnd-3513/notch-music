@@ -26,6 +26,7 @@ static MRSetElapsed setElapsed;
 static dispatch_queue_t queue;
 static NSUInteger lastArtHash = 0;
 static NSUInteger pendingGeneration = 0;
+static NSDictionary *lastEmitted = nil;
 
 static NSString *const K = @"kMRMediaRemoteNowPlayingInfo";
 
@@ -75,6 +76,9 @@ static void emit(void) {
                     lastArtHash = 0;
                     o[@"artwork"] = [NSNull null];
                 }
+                // 바뀐 게 없으면 보내지 않는다. 앱을 깨우지 않으려는 것.
+                if ([o isEqualToDictionary:lastEmitted]) return;
+                lastEmitted = [o copy];
                 writeLine(o);
             };
             if (getClient) getClient(queue, finish);
@@ -143,9 +147,10 @@ void adapter_run(void *perl, void *cv) {
                                                       usingBlock:^(NSNotification *note) { scheduleEmit(); }];
     }
 
-    // 알림을 안 보내는 앱(일부 브라우저)을 위해 3초마다 한 번씩도 확인한다.
+    // 알림을 안 보내는 앱(일부 브라우저)을 위해 5초마다 한 번씩도 확인한다.
+    // 여유(leeway)를 크게 줘서 macOS가 다른 일과 묶어 깨울 수 있게 한다.
     dispatch_source_t timer = dispatch_source_create(DISPATCH_SOURCE_TYPE_TIMER, 0, 0, queue);
-    dispatch_source_set_timer(timer, DISPATCH_TIME_NOW, 3 * NSEC_PER_SEC, NSEC_PER_SEC / 2);
+    dispatch_source_set_timer(timer, DISPATCH_TIME_NOW, 5 * NSEC_PER_SEC, 2 * NSEC_PER_SEC);
     dispatch_source_set_event_handler(timer, ^{ emit(); });
     dispatch_resume(timer);
 

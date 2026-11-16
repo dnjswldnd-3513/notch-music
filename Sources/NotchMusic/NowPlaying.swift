@@ -1,4 +1,5 @@
 import AppKit
+import ImageIO
 import SwiftUI
 
 /// 어댑터(perl + adapter.dylib)를 띄워 재생 정보를 받고, 명령을 보낸다.
@@ -32,10 +33,30 @@ final class NowPlaying: ObservableObject {
         return duration > 0 ? min(value, duration) : value
     }
 
-    /// 앨범 커버가 없을 때 대신 보여 줄 재생 앱 아이콘.
-    var appIcon: NSImage? {
-        guard let bundleId, let url = NSWorkspace.shared.urlForApplication(withBundleIdentifier: bundleId) else { return nil }
-        return NSWorkspace.shared.icon(forFile: url.path)
+    /// 앨범 커버가 없을 때 대신 보여 줄 재생 앱 아이콘. 앱이 바뀔 때만 한 번 찾는다.
+    @Published private(set) var appIcon: NSImage?
+
+    private func refreshAppIcon() {
+        guard let bundleId, let url = NSWorkspace.shared.urlForApplication(withBundleIdentifier: bundleId) else {
+            appIcon = nil
+            return
+        }
+        let icon = NSWorkspace.shared.icon(forFile: url.path)
+        icon.size = NSSize(width: 64, height: 64)
+        appIcon = icon
+    }
+
+    /// 커버 원본(보통 1000px 이상, 4MB 넘는 비트맵)을 화면에 쓰는 크기로 줄여 메모리를 아낀다.
+    private static func thumbnail(from data: Data) -> NSImage? {
+        guard let source = CGImageSourceCreateWithData(data as CFData, nil) else { return nil }
+        let options: [CFString: Any] = [
+            kCGImageSourceCreateThumbnailFromImageAlways: true,
+            kCGImageSourceThumbnailMaxPixelSize: 128,
+            kCGImageSourceCreateThumbnailWithTransform: true,
+            kCGImageSourceShouldCacheImmediately: true,
+        ]
+        guard let image = CGImageSourceCreateThumbnailAtIndex(source, 0, options as CFDictionary) else { return nil }
+        return NSImage(cgImage: image, size: NSSize(width: 64, height: 64))
     }
 
     func start() {
@@ -138,7 +159,10 @@ final class NowPlaying: ObservableObject {
         let newDuration = object["duration"] as? Double ?? 0
         if duration != newDuration { duration = newDuration }
         let newBundle = object["bundleId"] as? String
-        if bundleId != newBundle { bundleId = newBundle }
+        if bundleId != newBundle {
+            bundleId = newBundle
+            refreshAppIcon()
+        }
         let newRate = object["rate"] as? Double ?? 0
         if rate != newRate { rate = newRate }
         if !keepPlaying {
@@ -146,14 +170,19 @@ final class NowPlaying: ObservableObject {
             if isPlaying != newPlaying { isPlaying = newPlaying }
         }
         if !keepPosition {
-            elapsed = object["elapsed"] as? Double ?? 0
-            if let seconds = object["timestamp"] as? Double {
-                timestamp = Date(timeIntervalSince1970: seconds)
+            let newElapsed = object["elapsed"] as? Double ?? 0
+            let newTimestamp = (object["timestamp"] as? Double).map(Date.init(timeIntervalSince1970:)) ?? now
+            // 계산한 위치와 0.5초 넘게 어긋날 때만 고친다. 같은 값으로 화면을 다시 그리지 않으려는 것.
+            let predicted = position(at: now)
+            let reported = newElapsed + (isPlaying ? now.timeIntervalSince(newTimestamp) * max(rate, 0) : 0)
+            if abs(predicted - reported) > 0.5 || trackChanged {
+                elapsed = newElapsed
+                timestamp = newTimestamp
             }
         }
 
         if let encoded = object["artwork"] as? String {
-            let image = Data(base64Encoded: encoded).flatMap(NSImage.init(data:))
+            let image = Data(base64Encoded: encoded).flatMap(Self.thumbnail(from:))
             artwork = image
             accent = image.map { ArtworkColor.accent(from: $0) } ?? ArtworkColor.fallback
         } else if object["artwork"] is NSNull {
