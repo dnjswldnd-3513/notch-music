@@ -72,11 +72,14 @@ final class NotchState: ObservableObject {
     /// 노치 위쪽 모서리가 바깥으로 살짝 휘어지는 부분의 반지름.
     let flare: CGFloat = 8
     let expandedWidth: CGFloat = 400
-    /// 숨은 아이콘 판: 메뉴 막대의 우리 아이콘을 누르면, macOS가 « 안에 숨긴 아이콘들을 판에 모아 보여 준다.
-    /// 손쉬운 사용 권한이 필요하다. (예전 "메뉴 막대 서랍" 설정을 그대로 이어 쓴다)
-    @Published var trayEnabled = UserDefaults.standard.bool(forKey: "trayEnabled") {
-        didSet { UserDefaults.standard.set(trayEnabled, forKey: "trayEnabled") }
+    /// 메뉴 막대에 맞추기: 노치 양옆 빈 틈을 재서, 음악 표시가 메뉴나 아이콘을 덮지 않게 그 틈 안에만 둔다.
+    /// 손쉬운 사용 권한이 필요하다. (예전 "메뉴 막대 서랍"을 켰던 사람은 켜진 채로 시작)
+    @Published var fitToMenuBar = UserDefaults.standard.object(forKey: "fitToMenuBar") as? Bool
+        ?? UserDefaults.standard.bool(forKey: "trayEnabled") {
+        didSet { UserDefaults.standard.set(fitToMenuBar, forKey: "fitToMenuBar") }
     }
+    /// 잰 빈 틈. nil이면 모르는 상태라 설정한 위치(왼쪽에만/양옆) 그대로 둔다.
+    @Published var room: MenuBarSpace.Room?
 
     /// 지금 재생 중인 게 있는지 (컨트롤러가 NowPlaying에서 옮겨 넣는다)
     @Published var hasMedia = false
@@ -86,6 +89,33 @@ final class NotchState: ObservableObject {
     let expandedBodyHeight: CGFloat = 132
 
     var sideWidth: CGFloat { max(notchSize.height - 4, 26) }
+
+    /// 접혔을 때 노치 왼쪽·오른쪽에 무엇을 둘지
+    enum Piece { case cover, wave }
+    struct CollapsedLayout: Equatable {
+        var left: [Piece]
+        var right: [Piece]
+    }
+
+    /// 조각 하나가 차지하는 폭과 바깥 여백
+    let pieceWidth: CGFloat = 28
+    let sidePadding: CGFloat = 8
+    func width(of pieces: [Piece]) -> CGFloat {
+        pieces.isEmpty ? 0 : CGFloat(pieces.count) * pieceWidth + sidePadding
+    }
+
+    /// 빈 틈에 들어가는 것 중 설정과 가장 가까운 배치를 고른다. 아무것도 안 들어가면 노치 안에 숨는다.
+    var collapsedLayout: CollapsedLayout {
+        let preferred: [CollapsedLayout] = collapsedStyle == .left
+            ? [.init(left: [.cover, .wave], right: []), .init(left: [.cover], right: [.wave]),
+               .init(left: [], right: [.cover, .wave]), .init(left: [.cover], right: []), .init(left: [], right: [.cover])]
+            : [.init(left: [.cover], right: [.wave]), .init(left: [.cover, .wave], right: []),
+               .init(left: [], right: [.cover, .wave]), .init(left: [.cover], right: []), .init(left: [], right: [.cover])]
+        guard fitToMenuBar, let room else { return preferred[0] }
+        // 아이콘과 딱 붙지 않게 4pt 여유를 남긴다.
+        return preferred.first { width(of: $0.left) <= room.left - 4 && width(of: $0.right) <= room.right - 4 }
+            ?? .init(left: [], right: [])
+    }
     var windowSize: CGSize {
         CGSize(width: expandedWidth + flare * 2 + 40, height: notchSize.height + expandedBodyHeight + 20)
     }
@@ -105,15 +135,9 @@ final class NotchState: ObservableObject {
         guard hasMedia else {
             return NotchGeometry(neckLeft: -half, neckRight: half, bodyLeft: -half, bodyRight: half, height: notchSize.height)
         }
-        let left: CGFloat, right: CGFloat
-        switch collapsedStyle {
-        case .left:
-            left = -(half + sideWidth * 2)
-            right = half
-        case .both:
-            left = -(half + sideWidth)
-            right = half + sideWidth
-        }
+        let layout = collapsedLayout
+        let left = -(half + width(of: layout.left))
+        let right = half + width(of: layout.right)
         return NotchGeometry(neckLeft: left, neckRight: right, bodyLeft: left, bodyRight: right, height: notchSize.height)
     }
 
@@ -133,11 +157,13 @@ final class NotchController {
     /// 클릭 모드에서 사용자가 펼쳐 둔 상태.
     private var pinned = false
     private var observers: [AnyCancellable] = []
-    /// 메뉴 막대의 우리 아이콘과 숨은 아이콘 판 (노치와는 따로 동작한다)
-    let hiddenIcons = HiddenIconsController()
     private var mouseMonitors: [Any] = []
     /// 마우스가 노치 안에 있는 동안만 도는 타이머. 밖에서는 이벤트가 올 때만 확인한다.
     private var insideTimer: Timer?
+    /// 메뉴 막대에 맞추기: 다시 잴 때를 알려 주는 알림과 감시들
+    private var fitObservers: [NSObjectProtocol] = []
+    private var menuBarClickMonitor: Any?
+    private var permissionTimer: Timer?
 
     func start() {
         panel = NotchPanel(
@@ -161,7 +187,10 @@ final class NotchController {
 
         NotificationCenter.default.addObserver(
             forName: NSApplication.didChangeScreenParametersNotification, object: nil, queue: .main
-        ) { [weak self] _ in self?.layout() }
+        ) { [weak self] _ in
+            self?.layout()
+            self?.remeasure(after: 0.5)
+        }
 
         // 마우스가 움직일 때만 깨어난다. (예전에는 1초에 60번씩 계속 확인했다)
         let events: NSEvent.EventTypeMask = [.mouseMoved, .leftMouseDragged]
@@ -180,9 +209,9 @@ final class NotchController {
         observers.append(state.$collapsedStyle.dropFirst().sink { [weak self] _ in self?.resetExpansion() })
 
         player.onTrackChange = { [weak self] in self?.peek() }
-        // 숨은 아이콘 판을 켜고 끄면 메뉴 막대의 우리 아이콘도 생기고 사라진다.
-        observers.append(state.$trayEnabled.removeDuplicates().sink { [weak self] enabled in
-            self?.hiddenIcons.setEnabled(enabled)
+        // 메뉴 막대에 맞추기를 켜면 권한부터 받고 빈 틈을 잰다.
+        observers.append(state.$fitToMenuBar.removeDuplicates().sink { [weak self] enabled in
+            self?.setFitting(enabled)
         })
         observers.append(player.$title.map { !$0.isEmpty }.removeDuplicates().sink { [weak self] has in
             self?.state.hasMedia = has
@@ -228,6 +257,72 @@ final class NotchController {
         guard g.height > barHeight else { return false }
         let body = NSRect(x: mid + g.bodyLeft, y: top - g.height, width: g.bodyRight - g.bodyLeft, height: g.height - barHeight)
         return body.insetBy(dx: -margin * 2, dy: -margin * 2).contains(point)
+    }
+
+    // MARK: - 메뉴 막대에 맞추기
+
+    private func setFitting(_ enabled: Bool) {
+        fitObservers.forEach { NSWorkspace.shared.notificationCenter.removeObserver($0) }
+        fitObservers = []
+        if let menuBarClickMonitor { NSEvent.removeMonitor(menuBarClickMonitor) }
+        menuBarClickMonitor = nil
+        permissionTimer?.invalidate()
+        guard enabled else {
+            setRoom(nil)
+            return
+        }
+
+        if !AXIsProcessTrusted() {
+            // 시스템 설정의 손쉬운 사용 허락 창을 띄우고, 허락되면 바로 잰다.
+            let options = [kAXTrustedCheckOptionPrompt.takeUnretainedValue() as String: true] as CFDictionary
+            AXIsProcessTrustedWithOptions(options)
+            var remaining = 180
+            permissionTimer = Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { [weak self] timer in
+                remaining -= 1
+                if AXIsProcessTrusted() { self?.remeasure(after: 0) }
+                if AXIsProcessTrusted() || remaining <= 0 { timer.invalidate() }
+            }
+        }
+
+        // 틈이 바뀌는 때에만 다시 잰다. (계속 확인하지 않아서 CPU를 쓰지 않는다)
+        //  - 앞에 있는 앱이 바뀌면 앱 메뉴 길이가 달라진다
+        //  - 앱이 켜지거나 꺼지면 메뉴 막대 아이콘이 생기거나 사라진다
+        let center = NSWorkspace.shared.notificationCenter
+        let triggers: [(Notification.Name, TimeInterval)] = [
+            (NSWorkspace.didActivateApplicationNotification, 0.15),
+            (NSWorkspace.didLaunchApplicationNotification, 1.5),
+            (NSWorkspace.didTerminateApplicationNotification, 0.5),
+        ]
+        for (name, delay) in triggers {
+            fitObservers.append(center.addObserver(forName: name, object: nil, queue: .main) { [weak self] _ in
+                self?.remeasure(after: delay)
+            })
+        }
+        //  - 메뉴 막대를 누르면(« 펼치기·접기 포함) 아이콘 자리가 바뀔 수 있다
+        menuBarClickMonitor = NSEvent.addGlobalMonitorForEvents(matching: [.leftMouseUp]) { [weak self] _ in
+            guard let self, let screen = self.screen else { return }
+            if NSEvent.mouseLocation.y >= screen.frame.maxY - self.state.notchSize.height - 2 {
+                self.remeasure(after: 0.4)
+            }
+        }
+        remeasure(after: 0)
+    }
+
+    private func remeasure(after delay: TimeInterval) {
+        guard state.fitToMenuBar else { return }
+        DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in
+            DispatchQueue.global(qos: .utility).async {
+                let room = MenuBarSpace.measure()
+                DispatchQueue.main.async { self?.setRoom(room) }
+            }
+        }
+    }
+
+    private func setRoom(_ room: MenuBarSpace.Room?) {
+        // 1pt 안쪽 차이는 무시해서 쓸데없이 다시 그리지 않는다.
+        if let old = state.room, let room, abs(old.left - room.left) < 1, abs(old.right - room.right) < 1 { return }
+        guard state.room != room else { return }
+        withAnimation(.spring(response: 0.35, dampingFraction: 0.85)) { state.room = room }
     }
 
     private func trackMouse() {

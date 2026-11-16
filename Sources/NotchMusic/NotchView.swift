@@ -27,7 +27,7 @@ struct NotchView: View {
                     .offset(x: center + g.bodyLeft)
                     .transition(.opacity.combined(with: .scale(scale: 0.94, anchor: .top)))
             } else if state.hasMedia {
-                CollapsedContent(player: player, style: state.collapsedStyle, sideWidth: state.sideWidth)
+                CollapsedContent(player: player, state: state)
                     .frame(width: g.neckRight - g.neckLeft, height: state.notchSize.height)
                     .offset(x: center + g.neckLeft)
                     .transition(.opacity)
@@ -40,34 +40,41 @@ struct NotchView: View {
         .opacity(state.isActive ? 1 : 0)
         .contextMenu { MenuItems(state: state) }
         .animation(.easeInOut(duration: 0.3), value: state.hasMedia)
-        .animation(.spring(response: 0.3, dampingFraction: 0.85), value: state.collapsedStyle)
+        .animation(.spring(response: 0.3, dampingFraction: 0.85), value: state.collapsedLayout)
     }
 }
 
 // MARK: - 접힌 모습
 
+/// 노치 왼쪽·오른쪽 빈 틈에 들어가는 조각(커버, 막대)만 놓는다. 무엇을 어디에 둘지는 NotchState.collapsedLayout이 정한다.
 private struct CollapsedContent: View {
     @ObservedObject var player: NowPlaying
-    let style: CollapsedStyle
-    let sideWidth: CGFloat
+    @ObservedObject var state: NotchState
 
     var body: some View {
+        let layout = state.collapsedLayout
         HStack(spacing: 0) {
-            switch style {
-            case .left:
-                HStack(spacing: 8) {
-                    Cover(player: player, size: 20, radius: 5)
-                    Wave(playing: player.isPlaying, color: player.accent, height: 13)
+            side(layout.left)
+            Spacer(minLength: 0)
+            side(layout.right)
+        }
+    }
+
+    @ViewBuilder
+    private func side(_ pieces: [NotchState.Piece]) -> some View {
+        if !pieces.isEmpty {
+            HStack(spacing: 0) {
+                ForEach(Array(pieces.enumerated()), id: \.offset) { _, piece in
+                    Group {
+                        switch piece {
+                        case .cover: Cover(player: player, size: 20, radius: 5)
+                        case .wave: Wave(playing: player.isPlaying, color: player.accent, height: 13)
+                        }
+                    }
+                    .frame(width: state.pieceWidth)
                 }
-                .frame(width: sideWidth * 2)
-                Spacer(minLength: 0)
-            case .both:
-                Cover(player: player, size: 20, radius: 5)
-                    .frame(width: sideWidth)
-                Spacer(minLength: 0)
-                Wave(playing: player.isPlaying, color: player.accent, height: 13)
-                    .frame(width: sideWidth)
             }
+            .frame(width: state.width(of: pieces))
         }
     }
 }
@@ -336,7 +343,7 @@ private struct MenuItems: View {
         Picker("펼친 모양", selection: $state.expandedStyle) {
             ForEach(ExpandedStyle.allCases, id: \.self) { Text($0.title).tag($0) }
         }
-        Toggle("숨은 메뉴 막대 아이콘 판 (손쉬운 사용 권한 필요)", isOn: $state.trayEnabled)
+        Toggle("메뉴 막대 빈 틈에 맞추기 (손쉬운 사용 권한 필요)", isOn: $state.fitToMenuBar)
         Divider()
         Button(SMAppService.mainApp.status == .enabled ? "로그인 시 자동 실행 끄기" : "로그인 시 자동 실행 켜기") {
             let service = SMAppService.mainApp
