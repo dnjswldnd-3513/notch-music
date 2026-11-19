@@ -1,3 +1,5 @@
+<img src="Icon/icon.png" width="128" alt="NotchMusic 아이콘">
+
 # NotchMusic
 
 맥북 노치에 지금 재생 중인 음악과 통화·회의를 보여 주는 작은 앱입니다.
@@ -116,6 +118,7 @@ NotchMusic.app ──stdin(명령)──▶ /usr/bin/perl run.pl adapter.dylib �
 | `Sources/NotchMusic/CallViews.swift` | 통화 화면 (아이콘, 시간, 버튼) |
 | `Sources/NotchMusic/MenuBarSpace.swift` | 노치 양옆 빈 틈 재기(손쉬운 사용, 읽기만) |
 | `Sources/NotchMusic/MenuBarTray.swift` | 메뉴 막대 아이콘 목록 읽기 (개발용 진단) |
+| `Icon/make-icon.swift` | 앱 아이콘(`Icon/AppIcon.icns`) 그리기. 그림을 바꿀 때만 `swift Icon/make-icon.swift` |
 
 macOS 27부터 메뉴 막대 아이콘은 시스템(MenuBarAgent)이 그려서 따로 된 창이 없습니다. 그래서 손쉬운 사용으로 아이콘과 앱 메뉴의 위치를 읽어 빈 틈을 잽니다.
 
